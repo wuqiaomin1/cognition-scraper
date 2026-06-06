@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 认知作弊情报系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .login-page {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            padding: 20px;
+        }
+
+        .login-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 40px 36px;
+            width: 400px;
+            max-width: 100%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .login-logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .login-logo .icon {
+            font-size: 48px;
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        .login-logo h1 {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text);
+            margin: 0;
+        }
+
+        .login-logo p {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin: 6px 0 0;
+        }
+
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .form-field label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+
+        .form-field input {
+            width: 100%;
+            padding: 12px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 14px;
+            transition: border-color 0.2s;
+            box-sizing: border-box;
+        }
+
+        .form-field input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .login-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 4px;
+        }
+
+        .login-actions .btn {
+            flex: 1;
+            padding: 12px;
+            font-size: 15px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .btn-login {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+        }
+
+        .btn-login:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-register {
+            background: var(--border);
+            color: var(--text);
+            border: none;
+        }
+
+        .btn-register:hover {
+            background: #3a3a50;
+        }
+
+        .login-error {
+            text-align: center;
+            font-size: 13px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-top: 4px;
+            display: none;
+        }
+
+        .login-error.show {
+            display: block;
+        }
+
+        .login-error.error {
+            background: rgba(248, 113, 113, 0.15);
+            color: var(--red);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+        }
+
+        .login-error.success {
+            background: rgba(74, 222, 128, 0.15);
+            color: var(--green);
+            border: 1px solid rgba(74, 222, 128, 0.3);
+        }
+
+        .login-tip {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 20px;
+            line-height: 1.6;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-page">
+        <div class="login-card">
+            <div class="login-logo">
+                <span class="icon">🧠</span>
+                <h1>认知作弊情报系统</h1>
+                <p>AI 驱动的信息抓取与分析平台</p>
+            </div>
+
+            <div class="login-form" id="loginForm">
+                <div class="form-field">
+                    <label>用户名</label>
+                    <input type="text" id="username" placeholder="请输入用户名" autocomplete="username" autofocus>
+                </div>
+                <div class="form-field">
+                    <label>密码</label>
+                    <input type="password" id="password" placeholder="请输入密码" autocomplete="current-password">
+                </div>
+                <div class="login-actions">
+                    <button class="btn btn-login" onclick="handleLogin()">登 录</button>
+                    <button class="btn btn-register" onclick="handleRegister()">注 册</button>
+                </div>
+                <div class="login-error" id="loginError"></div>
+            </div>
+
+            <div class="login-tip">
+                新用户可直接输入用户名和密码注册<br>
+                数据隔离存储，每位用户有独立的知识库和配置
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function handleLogin() {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!username || !password) {
+                showError('请输入用户名和密码', 'error');
+                return;
+            }
+
+            setLoading(true);
+            try {
+                const resp = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await resp.json();
+
+                if (data.ok) {
+                    showError('登录成功，正在跳转...', 'success');
+                    setTimeout(() => { window.location.href = '/'; }, 500);
+                } else {
+                    showError(data.message || '登录失败', 'error');
+                }
+            } catch (e) {
+                showError('网络错误，请重试', 'error');
+            }
+            setLoading(false);
+        }
+
+        async function handleRegister() {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!username || !password) {
+                showError('请输入用户名和密码', 'error');
+                return;
+            }
+
+            if (username.length < 2) {
+                showError('用户名至少2个字符', 'error');
+                return;
+            }
+
+            if (password.length < 4) {
+                showError('密码至少4个字符', 'error');
+                return;
+            }
+
+            setLoading(true);
+            try {
+                const resp = await fetch('/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await resp.json();
+
+                if (data.ok) {
+                    showError(data.message + ' 正在登录...', 'success');
+                    // 注册成功后自动登录
+                    const resp2 = await fetch('/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, password })
+                    });
+                    const data2 = await resp2.json();
+                    if (data2.ok) {
+                        setTimeout(() => { window.location.href = '/'; }, 500);
+                    } else {
+                        showError('注册成功，请手动登录', 'success');
+                    }
+                } else {
+                    showError(data.message || '注册失败', 'error');
+                }
+            } catch (e) {
+                showError('网络错误，请重试', 'error');
+            }
+            setLoading(false);
+        }
+
+        function showError(msg, type) {
+            const el = document.getElementById('loginError');
+            el.textContent = msg;
+            el.className = 'login-error show ' + type;
+        }
+
+        function setLoading(loading) {
+            document.querySelectorAll('.btn').forEach(b => b.disabled = loading);
+            document.getElementById('username').disabled = loading;
+            document.getElementById('password').disabled = loading;
+        }
+
+        // 回车键登录
+        document.getElementById('password').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') handleLogin();
+        });
+        document.getElementById('username').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                document.getElementById('password').focus();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🧠 认知作弊情报系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-icon">🧠</span>
+                <span class="logo-text">认知作弊</span>
+            </div>
+            <nav class="nav">
+                <a class="nav-item active" data-page="dashboard" onclick="switchPage('dashboard')">
+                    <span class="nav-icon">📊</span> 今日情报
+                </a>
+                <a class="nav-item" onclick="window.open('/chat','_blank')" style="cursor:pointer;">
+                    <span class="nav-icon">💬</span> 微信风格
+                </a>
+                <a class="nav-item" data-page="reports" onclick="switchPage('reports')">
+                    <span class="nav-icon">📋</span> 历史日报
+                </a>
+                <a class="nav-item" data-page="knowledge" onclick="switchPage('knowledge')">
+                    <span class="nav-icon">📚</span> 我的知识库
+                </a>
+                <a class="nav-item" data-page="settings" onclick="switchPage('settings')">
+                    <span class="nav-icon">⚙️</span> 设置
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div style="display:flex;flex-direction:column;gap:4px;width:100%;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <div class="status-dot" id="statusDot"></div>
+                        <span id="statusText">系统运行中</span>
+                    </div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                        <span id="sidebarUser" style="font-size:12px;color:var(--text-dim);">加载中...</span>
+                        <a href="/logout" style="font-size:12px;color:var(--accent);text-decoration:none;">退出</a>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <!-- ========== 仪表盘 ========== -->
+            <section class="page active" id="page-dashboard">
+                <header class="page-header">
+                    <h1>📊 今日情报</h1>
+                    <div class="header-actions">
+                        <span class="last-run" id="lastRun">尚未执行抓取</span>
+                        <button class="btn btn-primary" id="btnScrape" onclick="triggerScrape(false)">🔄 立即抓取</button>
+                        <button class="btn btn-secondary" id="btnScrapeMail" onclick="triggerScrape(true)">📧 抓取并推送</button>
+                    </div>
+                </header>
+
+                <!-- 今日概览卡片 -->
+                <div class="card">
+                    <h2>📈 今日概览</h2>
+                    <div class="stats-row" id="todayStats">
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">总条数</span></div>
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">AI/技术</span></div>
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">商业/创业</span></div>
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">政策/宏观</span></div>
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">投资/财报</span></div>
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">消费/市场</span></div>
+                    </div>
+                </div>
+
+                <!-- 知识库概览 -->
+                <div class="card">
+                    <h2>📚 知识库</h2>
+                    <div class="stats-row" id="kbOverview">
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">知识总量</span></div>
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">已收藏</span></div>
+                        <div class="stat-card"><span class="stat-num">-</span><span class="stat-label">有笔记</span></div>
+                    </div>
+                </div>
+
+                <!-- 进度条 -->
+                <div class="card" id="progressCard" style="display:none;">
+                    <h2>⏳ 抓取进度</h2>
+                    <div class="progress-bar-container"><div class="progress-bar" id="progressBar"></div></div>
+                    <p class="progress-text" id="progressText">准备中...</p>
+                </div>
+
+                <!-- 分类日报预览 -->
+                <div class="card">
+                    <h2>📄 今日情报日报</h2>
+                    <div class="report-preview" id="reportPreview">
+                        <div class="empty-state">点击「立即抓取」获取今日情报</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ========== 历史日报 ========== -->
+            <section class="page" id="page-reports">
+                <header class="page-header">
+                    <h1>📋 历史日报</h1>
+                </header>
+                <div class="card">
+                    <h2>日报列表</h2>
+                    <div class="history-list" id="historyList">
+                        <div class="empty-state">加载中...</div>
+                    </div>
+                </div>
+                <div class="card" id="reportDetailCard" style="display:none;">
+                    <h2 id="reportDetailTitle">日报详情</h2>
+                    <div class="report-content" id="reportDetailContent"></div>
+                </div>
+            </section>
+
+            <!-- ========== 知识库 ========== -->
+            <section class="page" id="page-knowledge">
+                <header class="page-header">
+                    <h1>📚 我的知识库</h1>
+                    <div class="header-actions">
+                        <button class="btn btn-secondary" onclick="exportKnowledge('markdown')">📥 导出Markdown</button>
+                        <button class="btn btn-secondary" onclick="exportKnowledge('json')">📦 导出JSON</button>
+                    </div>
+                </header>
+
+                <!-- 搜索和筛选 -->
+                <div class="card">
+                    <div class="kb-toolbar">
+                        <input type="text" class="kb-search" id="kbSearch" placeholder="🔍 搜索知识库..." oninput="searchKnowledge()">
+                        <select class="kb-filter" id="kbCategoryFilter" onchange="searchKnowledge()">
+                            <option value="">全部分类</option>
+                            <option value="🤖 AI/技术">🤖 AI/技术</option>
+                            <option value="💼 商业/创业">💼 商业/创业</option>
+                            <option value="🏛️ 政策/宏观">🏛️ 政策/宏观</option>
+                            <option value="🛒 消费/市场">🛒 消费/市场</option>
+                            <option value="💰 投资/财报">💰 投资/财报</option>
+                            <option value="🌍 其他">🌍 其他</option>
+                        </select>
+                        <label class="kb-fav-toggle">
+                            <input type="checkbox" id="kbFavOnly" onchange="searchKnowledge()"> ⭐ 仅收藏
+                        </label>
+                    </div>
+                </div>
+
+                <!-- 知识列表 -->
+                <div class="kb-list" id="kbList">
+                    <div class="empty-state">搜索或抓取后知识会出现在这里</div>
+                </div>
+
+                <!-- 笔记编辑弹窗 -->
+                <div class="modal-overlay" id="noteModal" style="display:none;">
+                    <div class="modal">
+                        <h3>📝 编辑笔记</h3>
+                        <textarea id="noteText" rows="5" placeholder="记录你的想法..."></textarea>
+                        <div class="modal-actions">
+                            <button class="btn btn-secondary" onclick="closeNoteModal()">取消</button>
+                            <button class="btn btn-primary" onclick="saveNote()">保存</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ========== 设置 ========== -->
+            <section class="page" id="page-settings">
+                <header class="page-header"><h1>⚙️ 设置</h1></header>
+                
+                <div class="card">
+                    <h2>📡 信息源</h2>
+                    <div class="checkbox-group" id="sourceCheckboxes">
+                        <label><input type="checkbox" value="36氪" checked> 36氪</label>
+                        <label><input type="checkbox" value="虎嗅" checked> 虎嗅</label>
+                        <label><input type="checkbox" value="极客公园" checked> 极客公园</label>
+                        <label><input type="checkbox" value="国务院政策文件库" checked> 国务院政策文件库</label>
+                        <label><input type="checkbox" value="巨潮资讯网" checked> 巨潮资讯网</label>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>⏰ 定时抓取</h2>
+                    <div class="form-row">
+                        <label class="form-label"><input type="checkbox" id="scheduleEnabled" checked> 启用每日自动抓取</label>
+                    </div>
+                    <div class="form-row">
+                        <label>抓取时间</label>
+                        <input type="time" id="scheduleTime" value="08:00">
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>📧 邮件推送</h2>
+                    <div class="form-row">
+                        <label class="form-label"><input type="checkbox" id="emailEnabled"> 启用邮件推送</label>
+                    </div>
+                    <div class="form-group" id="emailConfigGroup">
+                        <div class="form-row"><label>SMTP服务器</label><input type="text" id="smtpHost" placeholder="smtp.qq.com"></div>
+                        <div class="form-row"><label>端口</label><input type="number" id="smtpPort" placeholder="587"></div>
+                        <div class="form-row"><label>发件邮箱</label><input type="email" id="senderEmail" placeholder="your@qq.com"></div>
+                        <div class="form-row"><label>授权码</label><input type="password" id="emailPassword" placeholder="SMTP授权码"></div>
+                        <div class="form-row"><label>收件邮箱（逗号分隔）</label><input type="text" id="recipients" placeholder="a@qq.com"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>💬 微信推送（企业微信机器人）</h2>
+                    <p class="card-desc">配置企业微信群机器人Webhook，每天自动推送情报到微信</p>
+                    <div class="form-row">
+                        <label class="form-label"><input type="checkbox" id="wechatEnabled" onchange="toggleWechatConfig()"> 启用微信推送</label>
+                    </div>
+                    <div class="form-group" id="wechatConfigGroup">
+                        <div class="form-row">
+                            <label>Webhook地址</label>
+                            <input type="text" id="wechatWebhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx">
+                        </div>
+                        <div class="form-row">
+                            <button class="btn btn-secondary" onclick="testWechat()" style="margin-top:4px;">🧪 测试推送</button>
+                            <button class="btn btn-secondary" onclick="pushWechatNow()" style="margin-top:4px;">📤 立即推送今日日报</button>
+                        </div>
+                        <p style="font-size:12px;color:var(--text-dim);margin-top:8px;">
+                            💡 如何获取Webhook地址：企业微信 → 群聊 → 群设置 → 群机器人 → 添加机器人 → 复制Webhook地址
+                        </p>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="saveSettings()">💾 保存设置</button>
+                    <span class="save-status" id="saveStatus"></span>
+                </div>
+            </section>
+        </main>
+
+        <!-- ========== AI答疑小助手 侧边面板 ========== -->
+        <div class="ai-panel" id="aiPanel" style="display:none;">
+            <div class="ai-panel-header">
+                <h3>🤖 AI答疑小助手</h3>
+                <div class="ai-panel-header-actions">
+                    <button class="btn-icon btn-icon-sm" onclick="document.getElementById('aiMessages').innerHTML='';aiChatHistory=[];" title="清空对话">🗑️</button>
+                    <button class="btn-icon btn-icon-sm" onclick="closeAIPanel()" title="关闭">✕</button>
+                </div>
+            </div>
+            <div class="ai-messages" id="aiMessages">
+                <div class="ai-msg ai-msg-bot">
+                    🤖 你好！我是你的AI答疑小助手。<br><br>
+                    我可以帮你：<br>
+                    • 解释不懂的概念和术语<br>
+                    • 分析新闻背后的含义<br>
+                    • 回答关于政策、商业、AI的问题<br>
+                    • 结合知识库给你上下文解读<br><br>
+                    👉 在日报中点击「🤖 问问AI」可以直接提问！
+                </div>
+            </div>
+            <div class="ai-input-area">
+                <textarea id="aiInput" placeholder="输入你的问题，比如：这条政策对我有什么影响？" rows="2"></textarea>
+                <button class="btn btn-primary btn-sm" onclick="sendAIMessage()">发送</button>
+            </div>
+        </div>
+
+        <!-- AI助手触发按钮 -->
+        <button class="ai-trigger" id="aiTrigger" onclick="toggleAIPanel()" title="AI答疑小助手">
+            🤖
+        </button>
+    </div>
+
+    <div class="toast" id="toast"></div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

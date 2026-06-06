@@ -1,0 +1,25 @@
+# 敏感配置文件
+config.json
+
+# SQLite 数据库
+*.db
+*.db-journal
+*.db-wal
+
+# 输出文件
+output/
+!output/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
