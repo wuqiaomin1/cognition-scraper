@@ -471,6 +471,18 @@ def api_kb_categories():
     return jsonify({"ok": True, "categories": cats})
 
 
+@app.route('/api/debug')
+def api_debug():
+    """调试接口 - 检查环境变量（部署后删除）"""
+    db_url = os.environ.get("DATABASE_URL", "")
+    return jsonify({
+        "db_mode": "postgresql" if USE_PG else "sqlite",
+        "DATABASE_URL_set": bool(db_url),
+        "DATABASE_URL_prefix": db_url[:30] + "..." if db_url else "NOT SET",
+        "all_env_keys": [k for k in os.environ.keys() if not k.startswith("_")]
+    })
+
+
 # ==================== AI助手API ====================
 
 @app.route('/api/ai/chat', methods=['POST'])
