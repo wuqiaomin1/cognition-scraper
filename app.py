@@ -1,7 +1,6 @@
-"""认知作弊信息抓取系统 v5 —— 多用户版 + 知识库隔离 + Flask Web应用"""
+"""认知作弊信息抓取系统 v6 —— 多用户版 + 云数据库 + 持久化存储"""
 import os
 import json
-import re
 import smtplib
 import threading
 from email.mime.text import MIMEText
@@ -9,47 +8,46 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, render_template, jsonify, request, send_from_directory, session
+from flask import Flask, jsonify, request, send_from_directory, session
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from scraper import (
     Kr36Scraper, HuxiuScraper, GeekparkScraper,
     PolicyScraper, CninfoScraper,
-    ReportGeneratorV2, KnowledgeBase, CATEGORIES,
+    ReportGeneratorV2, CATEGORIES,
     WeChatPusher, format_wechat_chat_message
 )
 from scraper.ai_assistant import AIAssistant
-from models import init_db, get_user_config, save_user_config, row_to_config_dict
+from models import (
+    init_db, get_user_config, save_user_config, row_to_config_dict,
+    kb_add, kb_batch_add, kb_search, kb_get_stats, kb_get_by_category, kb_export_all,
+    get_user_kb_state, toggle_user_favorite, save_user_note, mark_user_read,
+    save_daily_report, get_daily_report, get_report_history, USE_PG
+)
 from auth import auth_bp, login_required
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'cognition-scraper-v5-2026')
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'cognition-scraper-v6-2026')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 
-# 注册认证蓝图
 app.register_blueprint(auth_bp)
 
-# 初始化数据库（gunicorn 不会走 __main__，必须模块级别执行）
+# 初始化数据库
 init_db()
 
-CONFIG_FILE = Path(__file__).parent / "config.json"
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 scheduler = BackgroundScheduler()
 scrape_status = {"running": False, "last_run": None, "progress": ""}
 
-# 全局知识库（抓取结果存入这里，所有用户共享条目）
-global_kb = KnowledgeBase(str(OUTPUT_DIR / "knowledge_base.json"))
-
-# AI助手（不绑定特定知识库，运行时切换）
+# AI助手
 ai_assistant = AIAssistant(None)
 
 
 # ==================== 用户配置管理 ====================
 
 def get_current_config() -> dict:
-    """获取当前用户的配置（已登录=用户配置，未登录=全局配置）"""
     user_id = session.get('user_id')
     if user_id:
         try:
@@ -61,7 +59,7 @@ def get_current_config() -> dict:
 
 
 def load_config() -> dict:
-    """加载全局默认配置（模板）"""
+    CONFIG_FILE = Path(__file__).parent / "config.json"
     defaults = {
         "email": {"enabled": False, "smtp_host": "smtp.qq.com", "smtp_port": 587,
                   "sender": "", "password": "", "recipients": []},
@@ -84,55 +82,9 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
-    """保存全局默认配置"""
+    CONFIG_FILE = Path(__file__).parent / "config.json"
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
-
-
-# ==================== 知识库用户隔离 ====================
-
-def get_user_kb():
-    """获取当前用户的知识库实例（全局条目 + 用户个人状态）"""
-    user_id = session.get('user_id')
-    if user_id:
-        kb_path = OUTPUT_DIR / f"knowledge_base_{user_id}.json"
-        return KnowledgeBase(str(kb_path))
-    return global_kb
-
-
-def get_user_kb_state_path(user_id: int) -> Path:
-    """获取用户知识库状态文件路径"""
-    return OUTPUT_DIR / f"user_kb_state_{user_id}.json"
-
-
-def load_user_kb_state(user_id: int) -> dict:
-    """加载用户的知识库状态（收藏/笔记/已读）"""
-    path = get_user_kb_state_path(user_id)
-    if path.exists():
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            pass
-    return {"favorites": {}, "notes": {}, "read": {}}
-
-
-def save_user_kb_state(user_id: int, state: dict):
-    """保存用户的知识库状态"""
-    path = get_user_kb_state_path(user_id)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-
-
-def merge_user_state(items: list[dict], user_state: dict) -> list[dict]:
-    """将用户状态合并到知识库条目列表中"""
-    favorites = user_state.get("favorites", {})
-    notes = user_state.get("notes", {})
-    for item in items:
-        item_id = item.get("id", "")
-        item["favorite"] = favorites.get(item_id, False)
-        item["notes"] = notes.get(item_id, "")
-    return items
 
 
 # ==================== 抓取核心 ====================
@@ -151,12 +103,10 @@ def get_scrapers(sources: list[str] = None) -> dict:
 
 
 def run_scrape(send_email: bool = False, user_id: int = None):
-    """执行抓取 + 分类 + 入知识库"""
     global scrape_status
     scrape_status["running"] = True
 
     try:
-        # 获取配置（指定用户或全局）
         if user_id:
             try:
                 row = get_user_config(user_id)
@@ -183,20 +133,35 @@ def run_scrape(send_email: bool = False, user_id: int = None):
         # 2. 生成分类日报
         scrape_status["progress"] = "正在AI摘要与分类..."
         generator = ReportGeneratorV2(str(OUTPUT_DIR))
-        kb_stats = global_kb.get_stats()
+        kb_stats = kb_get_stats()
         report_result = generator.generate(all_results, kb_stats)
 
-        # 3. 入全局知识库（抓取条目全局共享）
+        # 3. 入知识库（数据库持久化）
         scrape_status["progress"] = "正在更新知识库..."
-        new_count = global_kb.batch_add(report_result["all_analyzed"])
+        new_count = kb_batch_add(report_result["all_analyzed"])
 
-        # 4. 发送邮件（给指定用户或全局配置）
+        # 4. 保存日报到数据库
+        today = datetime.now().strftime("%Y-%m-%d")
+        save_daily_report(today, report_result["markdown"], report_result.get("data", {}))
+
+        # 同时保存文件（兼容旧逻辑）
+        try:
+            md_path = OUTPUT_DIR / f"日报_{today}.md"
+            md_path.write_text(report_result["markdown"], encoding='utf-8')
+            data_path = OUTPUT_DIR / f"data_{today}.json"
+            data_path.write_text(json.dumps(report_result.get("data", {}), ensure_ascii=False, indent=2), encoding='utf-8')
+            latest_path = OUTPUT_DIR / "latest.md"
+            latest_path.write_text(report_result["markdown"], encoding='utf-8')
+        except Exception as e:
+            print(f"保存文件失败(不影响运行): {e}")
+
+        # 5. 发送邮件
         email_cfg = cfg.get("email", {})
         if send_email and email_cfg.get("enabled") and email_cfg.get("sender"):
             scrape_status["progress"] = "正在发送邮件..."
             send_report_email(report_result["markdown"], email_cfg)
 
-        # 5. 微信推送
+        # 6. 微信推送
         wechat_cfg = cfg.get("wechat", {})
         if wechat_cfg.get("enabled") and wechat_cfg.get("webhook_url"):
             scrape_status["progress"] = "正在推送到微信..."
@@ -210,14 +175,10 @@ def run_scrape(send_email: bool = False, user_id: int = None):
                     scrape_status["progress"] = f"完成！新增{new_count}条知识，微信推送部分失败"
             except Exception as e:
                 print(f"微信推送失败: {e}")
-                scrape_status["progress"] = f"完成！新增{new_count}条知识，微信推送失败: {e}"
         else:
-            scrape_status["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             scrape_status["progress"] = f"完成！新增{new_count}条知识"
 
         scrape_status["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if not wechat_cfg.get("enabled"):
-            scrape_status["progress"] = f"完成！新增{new_count}条知识"
     except Exception as e:
         scrape_status["progress"] = f"错误: {str(e)}"
         print(f"抓取任务失败: {e}")
@@ -249,13 +210,12 @@ def send_report_email(content: str, email_cfg: dict):
         server.login(email_cfg['sender'], email_cfg['password'])
         server.send_message(msg)
         server.quit()
-
         print(f"邮件发送成功")
     except Exception as e:
         print(f"邮件发送失败: {e}")
 
 
-# ==================== API路由 ====================
+# ==================== 页面路由 ====================
 
 @app.route('/')
 @login_required
@@ -266,28 +226,37 @@ def index():
 @app.route('/chat')
 @login_required
 def chat_page():
-    """微信聊天风格页面"""
     return send_from_directory('static', 'chat.html')
 
+
+# ==================== API路由 ====================
 
 @app.route('/api/status')
 @login_required
 def api_status():
     cfg = get_current_config()
-    generator = ReportGeneratorV2(str(OUTPUT_DIR))
-    history = generator.get_history(7)
 
-    # 获取用户知识库统计（合并全局条目 + 用户状态）
-    user_kb = get_user_kb()
-    kb_stats = user_kb.get_stats()
+    # 从数据库获取历史
+    try:
+        history = get_report_history(7)
+    except:
+        history = []
 
-    # 也展示全局知识库总量
-    global_stats = global_kb.get_stats()
-    kb_stats["global_total"] = global_stats.get("total", 0)
+    # 知识库统计
+    try:
+        kb_stats = kb_get_stats()
+    except:
+        kb_stats = {"total": 0, "categories": {}, "sources": {}}
 
+    # 获取最新日报
     latest_data = None
     if history:
-        latest_data = generator.read_data(history[0]["date"])
+        try:
+            report = get_daily_report(history[0]["date"])
+            if report and report.get("data_json"):
+                latest_data = report["data_json"]
+        except:
+            pass
 
     return jsonify({
         "scrape_status": scrape_status,
@@ -296,7 +265,8 @@ def api_status():
         "sources": cfg.get("sources", []),
         "history": history[:7],
         "kb_stats": kb_stats,
-        "latest_data": latest_data
+        "latest_data": latest_data,
+        "db_mode": "postgresql" if USE_PG else "sqlite"
     })
 
 
@@ -310,27 +280,39 @@ def api_scrape():
     user_id = session.get('user_id')
     thread = threading.Thread(target=run_scrape, args=(send_email, user_id), daemon=True)
     thread.start()
-
     return jsonify({"ok": True, "message": "抓取任务已启动"})
 
 
 @app.route('/api/report/<date_str>')
 @login_required
 def api_report(date_str):
-    generator = ReportGeneratorV2(str(OUTPUT_DIR))
-    content = generator.read_report(date_str)
-    if content:
-        return jsonify({"ok": True, "content": content})
+    # 先从数据库查
+    try:
+        report = get_daily_report(date_str)
+        if report and report.get("markdown"):
+            return jsonify({"ok": True, "content": report["markdown"]})
+    except:
+        pass
+    # 回退到文件
+    md_path = OUTPUT_DIR / f"日报_{date_str}.md"
+    if md_path.exists():
+        return jsonify({"ok": True, "content": md_path.read_text(encoding='utf-8')})
     return jsonify({"ok": False, "message": "日报不存在"}), 404
 
 
 @app.route('/api/report/<date_str>/data')
 @login_required
 def api_report_data(date_str):
-    generator = ReportGeneratorV2(str(OUTPUT_DIR))
-    data = generator.read_data(date_str)
-    if data:
-        return jsonify({"ok": True, "data": data})
+    try:
+        report = get_daily_report(date_str)
+        if report and report.get("data_json"):
+            return jsonify({"ok": True, "data": report["data_json"]})
+    except:
+        pass
+    data_path = OUTPUT_DIR / f"data_{date_str}.json"
+    if data_path.exists():
+        with open(data_path, 'r', encoding='utf-8') as f:
+            return jsonify({"ok": True, "data": json.load(f)})
     return jsonify({"ok": False, "message": "数据不存在"}), 404
 
 
@@ -343,43 +325,49 @@ def api_kb_search():
     category = request.args.get('category', '')
     favorite = request.args.get('favorite', '0') == '1'
     limit = int(request.args.get('limit', 50))
-
     user_id = session.get('user_id')
 
-    # 从全局知识库搜索条目
-    results = global_kb.search(query, category=category or None, favorite_only=False)
+    try:
+        results = kb_search(query=query, category=category or None, limit=limit)
+    except:
+        results = []
 
     # 合并用户状态
-    if user_id:
-        user_state = load_user_kb_state(user_id)
-        results = merge_user_state(results, user_state)
+    if user_id and results:
+        user_state = get_user_kb_state(user_id)
+        for item in results:
+            item_id = item.get("id", "")
+            item["favorite"] = item_id in user_state.get("favorites", {})
+            item["notes"] = user_state.get("notes", {}).get(item_id, "")
 
-    # 如果筛选仅收藏，过滤
     if favorite:
         results = [r for r in results if r.get("favorite")]
 
-    return jsonify({"ok": True, "items": results[:limit], "total": len(results)})
+    return jsonify({"ok": True, "items": results, "total": len(results)})
 
 
 @app.route('/api/kb/stats')
 @login_required
 def api_kb_stats():
     user_id = session.get('user_id')
-    global_stats = global_kb.get_stats()
+    try:
+        global_stats = kb_get_stats()
+    except:
+        global_stats = {"total": 0, "categories": {}, "sources": {}}
 
     if user_id:
-        user_state = load_user_kb_state(user_id)
-        favorites_count = len(user_state.get("favorites", {}))
-        notes_count = len([v for v in user_state.get("notes", {}).values() if v])
-        return jsonify({"ok": True, "stats": {
-            "total": global_stats.get("total", 0),
-            "favorites": favorites_count,
-            "with_notes": notes_count,
-            "categories": global_stats.get("categories", {}),
-            "sources": global_stats.get("sources", {}),
-            "last_updated": global_stats.get("last_updated", "")
-        }})
-
+        try:
+            user_state = get_user_kb_state(user_id)
+            return jsonify({"ok": True, "stats": {
+                "total": global_stats.get("total", 0),
+                "favorites": len(user_state.get("favorites", {})),
+                "with_notes": len([v for v in user_state.get("notes", {}).values() if v]),
+                "categories": global_stats.get("categories", {}),
+                "sources": global_stats.get("sources", {}),
+                "last_updated": global_stats.get("last_updated", "")
+            }})
+        except:
+            pass
     return jsonify({"ok": True, "stats": global_stats})
 
 
@@ -389,13 +377,11 @@ def api_kb_favorite(item_id):
     user_id = session.get('user_id')
     if not user_id:
         return jsonify({"ok": False, "message": "请先登录"}), 401
-
-    user_state = load_user_kb_state(user_id)
-    current = user_state["favorites"].get(item_id, False)
-    user_state["favorites"][item_id] = not current
-    save_user_kb_state(user_id, user_state)
-
-    return jsonify({"ok": True, "favorite": not current})
+    try:
+        is_fav = toggle_user_favorite(user_id, item_id)
+        return jsonify({"ok": True, "favorite": is_fav})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
 
 
 @app.route('/api/kb/note/<item_id>', methods=['POST'])
@@ -404,35 +390,29 @@ def api_kb_note(item_id):
     user_id = session.get('user_id')
     if not user_id:
         return jsonify({"ok": False, "message": "请先登录"}), 401
-
     note = request.json.get('note', '')
-    user_state = load_user_kb_state(user_id)
-    user_state["notes"][item_id] = note
-    save_user_kb_state(user_id, user_state)
-
-    return jsonify({"ok": True})
+    try:
+        save_user_note(user_id, item_id, note)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
 
 
 @app.route('/api/kb/read/<item_id>', methods=['POST'])
 @login_required
 def api_kb_read(item_id):
     user_id = session.get('user_id')
-    if not user_id:
-        # 未登录也允许标记已读（存全局）
-        global_kb.mark_read(item_id)
-        return jsonify({"ok": True})
-
-    user_state = load_user_kb_state(user_id)
-    user_state["read"][item_id] = datetime.now().isoformat()
-    save_user_kb_state(user_id, user_state)
-
+    if user_id:
+        try:
+            mark_user_read(user_id, item_id)
+        except:
+            pass
     return jsonify({"ok": True})
 
 
 @app.route('/api/kb/save', methods=['POST'])
 @login_required
 def api_kb_save():
-    """从日报一键保存到知识库"""
     user_id = session.get('user_id')
     item = {
         "title": request.json.get("title", ""),
@@ -443,13 +423,10 @@ def api_kb_save():
         "tags": request.json.get("tags", []),
         "priority": request.json.get("priority", "normal")
     }
-    item_id = global_kb.add(item)
+    item_id = kb_add(item)
 
-    # 自动收藏到用户
     if user_id:
-        user_state = load_user_kb_state(user_id)
-        user_state["favorites"][item_id] = True
-        save_user_kb_state(user_id, user_state)
+        toggle_user_favorite(user_id, item_id)
 
     return jsonify({"ok": True, "id": item_id})
 
@@ -458,25 +435,39 @@ def api_kb_save():
 @login_required
 def api_kb_export():
     fmt = request.json.get('format', 'markdown')
-    item_ids = request.json.get('item_ids', None)
-
-    path = global_kb.export_file(fmt, item_ids)
-    if path:
-        return jsonify({"ok": True, "path": path, "filename": Path(path).name})
-    return jsonify({"ok": False, "message": "导出失败"}), 500
+    try:
+        items = kb_export_all()
+        if fmt == "json":
+            filename = OUTPUT_DIR / f"knowledge_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            filename.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding='utf-8')
+        else:
+            lines = ["# 🧠 认知作弊知识库导出", f"> 导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}", f"> 共 {len(items)} 条知识", ""]
+            for item in items:
+                lines.append(f"### {item.get('title', '')}")
+                lines.append(f"- **来源**: {item.get('source', '')}")
+                lines.append(f"- **摘要**: {item.get('ai_summary', '')}")
+                if item.get('tags'):
+                    lines.append(f"- **标签**: {' '.join(['#' + t for t in item.get('tags', [])])}")
+                if item.get('url'):
+                    lines.append(f"- **链接**: {item.get('url')}")
+                lines.append("")
+            filename = OUTPUT_DIR / f"knowledge_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+            filename.write_text("\n".join(lines), encoding='utf-8')
+        return jsonify({"ok": True, "path": str(filename), "filename": filename.name})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
 
 
 @app.route('/api/kb/categories')
 @login_required
 def api_kb_categories():
-    """获取所有分类定义"""
     cats = []
     for name, info in CATEGORIES.items():
-        cats.append({
-            "name": name,
-            "desc": info.get("desc", ""),
-            "count": len(global_kb.get_by_category(name))
-        })
+        try:
+            count = len(kb_get_by_category(name))
+        except:
+            count = 0
+        cats.append({"name": name, "desc": info.get("desc", ""), "count": count})
     return jsonify({"ok": True, "categories": cats})
 
 
@@ -485,17 +476,18 @@ def api_kb_categories():
 @app.route('/api/ai/chat', methods=['POST'])
 @login_required
 def api_ai_chat():
-    """AI答疑助手聊天接口"""
     question = request.json.get('question', '')
     history = request.json.get('history', [])
-
     if not question.strip():
         return jsonify({"ok": False, "answer": "请输入你的问题"})
-
     try:
-        # 使用用户知识库进行检索
-        user_kb = get_user_kb()
-        ai_assistant.kb = user_kb
+        # 构造一个兼容的知识库给 AI 助手
+        from scraper.knowledge_base import KnowledgeBase
+        tmp_kb = KnowledgeBase(str(OUTPUT_DIR / "tmp_kb.json"))
+        items = kb_search(limit=200)
+        for item in items:
+            tmp_kb.add(item)
+        ai_assistant.kb = tmp_kb
         answer = ai_assistant.chat(question, history)
         return jsonify({"ok": True, "answer": answer})
     except Exception as e:
@@ -507,27 +499,20 @@ def api_ai_chat():
 @app.route('/api/wechat/push', methods=['POST'])
 @login_required
 def api_wechat_push():
-    """手动触发微信推送"""
     cfg = get_current_config()
     wechat_cfg = cfg.get("wechat", {})
-
     if not wechat_cfg.get("enabled") or not wechat_cfg.get("webhook_url"):
         return jsonify({"ok": False, "message": "请先在设置中配置企业微信Webhook地址并启用"}), 400
-
     try:
-        generator = ReportGeneratorV2(str(OUTPUT_DIR))
-        history = generator.get_history(1)
+        history = get_report_history(1)
         if not history:
             return jsonify({"ok": False, "message": "还没有日报数据，请先执行一次抓取"}), 400
-
-        report_data = generator.read_data(history[0]["date"])
-        if not report_data:
+        report = get_daily_report(history[0]["date"])
+        if not report or not report.get("data_json"):
             return jsonify({"ok": False, "message": "日报数据加载失败"}), 500
-
         pusher = WeChatPusher(wechat_cfg["webhook_url"])
         push_cats = wechat_cfg.get("push_categories", []) or None
-        result = pusher.push_daily_report(report_data, push_cats)
-
+        result = pusher.push_daily_report(report["data_json"], push_cats)
         return jsonify({"ok": result["ok"], "sent": result["sent"], "failed": result["failed"]})
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
@@ -536,15 +521,13 @@ def api_wechat_push():
 @app.route('/api/wechat/test', methods=['POST'])
 @login_required
 def api_wechat_test():
-    """测试微信推送"""
     webhook_url = request.json.get('webhook_url', '')
     if not webhook_url:
         return jsonify({"ok": False, "message": "请输入Webhook地址"}), 400
-
     try:
         pusher = WeChatPusher(webhook_url)
-        ok = pusher.send_text("认知作弊情报系统\n\n测试消息发送成功！\n\n如果收到这条消息，说明Webhook配置正确。")
-        return jsonify({"ok": ok, "message": "测试消息已发送" if ok else "发送失败，请检查Webhook地址"})
+        ok = pusher.send_text("认知作弊情报系统\n\n测试消息发送成功！")
+        return jsonify({"ok": ok, "message": "测试消息已发送" if ok else "发送失败"})
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
 
@@ -552,22 +535,23 @@ def api_wechat_test():
 @app.route('/api/wechat/messages')
 @login_required
 def api_wechat_messages():
-    """获取微信聊天风格的消息列表"""
-    generator = ReportGeneratorV2(str(OUTPUT_DIR))
-    history = generator.get_history(1)
-
-    if not history:
+    try:
+        history = get_report_history(1)
+        if not history:
+            return jsonify({"ok": True, "messages": [{
+                "role": "assistant", "type": "text",
+                "content": "你好！我还没抓到今天的消息呢。\n\n点击「立即抓取」按钮来获取今日情报吧！"
+            }]})
+        report = get_daily_report(history[0]["date"])
+        if not report or not report.get("data_json"):
+            return jsonify({"ok": False, "messages": []}), 500
+        messages = format_wechat_chat_message(report["data_json"])
+        return jsonify({"ok": True, "messages": messages, "date": history[0]["date"]})
+    except Exception as e:
         return jsonify({"ok": True, "messages": [{
             "role": "assistant", "type": "text",
-            "content": "你好！我还没抓到今天的消息呢。\n\n点击「立即抓取」按钮来获取今日情报吧！"
+            "content": "数据加载失败，请稍后再试"
         }]})
-
-    report_data = generator.read_data(history[0]["date"])
-    if not report_data:
-        return jsonify({"ok": False, "messages": []}), 500
-
-    messages = format_wechat_chat_message(report_data)
-    return jsonify({"ok": True, "messages": messages, "date": history[0]["date"]})
 
 
 # ==================== 配置API ====================
@@ -577,7 +561,6 @@ def api_wechat_messages():
 def api_config():
     if request.method == 'GET':
         cfg = get_current_config()
-        # 隐藏密码
         if cfg.get("email", {}).get("password"):
             cfg["email"]["password"] = "******"
         return jsonify(cfg)
@@ -586,7 +569,6 @@ def api_config():
     if new_cfg:
         user_id = session.get('user_id')
         if user_id:
-            # 处理密码占位符
             if new_cfg.get("email", {}).get("password") == "******":
                 try:
                     row = get_user_config(user_id)
@@ -600,7 +582,6 @@ def api_config():
                 old_cfg = load_config()
                 new_cfg["email"]["password"] = old_cfg.get("email", {}).get("password", "")
             save_config(new_cfg)
-
         update_scheduler_for_user(user_id, new_cfg.get("schedule", {}))
         return jsonify({"ok": True, "message": "配置已保存"})
     return jsonify({"ok": False}), 400
@@ -609,8 +590,10 @@ def api_config():
 @app.route('/api/history')
 @login_required
 def api_history():
-    generator = ReportGeneratorV2(str(OUTPUT_DIR))
-    history = generator.get_history(30)
+    try:
+        history = get_report_history(30)
+    except:
+        history = []
     return jsonify({"ok": True, "history": history})
 
 
@@ -623,36 +606,23 @@ def api_report_file(filename):
 # ==================== 定时任务 ====================
 
 def update_scheduler_for_user(user_id: int, schedule_cfg: dict):
-    """为特定用户更新定时任务"""
     job_id = f"daily_scrape_{user_id}" if user_id else "daily_scrape"
-
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
-
     if schedule_cfg.get("enabled", True):
         hour = schedule_cfg.get("hour", 8)
         minute = schedule_cfg.get("minute", 0)
-
         def job_func():
             return run_scrape(send_email=True, user_id=user_id)
-
         scheduler.add_job(
             job_func, 'cron', hour=hour, minute=minute,
             id=job_id, name=f'每日信息抓取(用户{user_id})'
         )
 
 
-def update_scheduler(schedule_cfg: dict):
-    """更新全局定时任务（向后兼容）"""
-    update_scheduler_for_user(None, schedule_cfg)
-
-
 def init_scheduler():
-    """初始化定时任务：为所有开启调度的用户创建任务"""
     cfg = load_config()
-    update_scheduler(cfg.get("schedule", {}))
-
-    # 为所有启用了定时任务的用户创建调度
+    update_scheduler_for_user(None, cfg.get("schedule", {}))
     try:
         from models import get_db
         db = get_db()
@@ -662,24 +632,19 @@ def init_scheduler():
             "WHERE uc.schedule_enabled=1"
         ).fetchall()
         db.close()
-
         for row in rows:
-            schedule_cfg = {
-                "enabled": bool(row["schedule_enabled"]),
-                "hour": row["schedule_hour"],
-                "minute": row["schedule_minute"]
-            }
-            update_scheduler_for_user(row["id"], schedule_cfg)
+            d = dict(row)
+            schedule_cfg = {"enabled": bool(d["schedule_enabled"]), "hour": d["schedule_hour"], "minute": d["schedule_minute"]}
+            update_scheduler_for_user(d["id"], schedule_cfg)
     except Exception as e:
         print(f"初始化用户定时任务失败: {e}")
-
     scheduler.start()
 
 
 if __name__ == '__main__':
-    init_db()
     print("=" * 50)
-    print("认知作弊信息抓取系统 v5 多用户版")
+    print("认知作弊信息抓取系统 v6 多用户版")
+    print(f"  数据库: {'PostgreSQL' if USE_PG else 'SQLite'}")
     print("  用户系统 | 知识库隔离 | AI分类摘要 | 分类日报")
     print("=" * 50)
     init_scheduler()

@@ -1,5 +1,6 @@
 ==================================================
-认知作弊信息抓取系统 v5 多用户版
+认知作弊信息抓取系统 v6 多用户版
+  数据库: SQLite
   用户系统 | 知识库隔离 | AI分类摘要 | 分类日报
 ==================================================
 输出目录: /workspace/cognition-scraper/output
@@ -12,20 +13,7 @@ Web界面: http://localhost:5000
  * Running on http://127.0.0.1:5000
  * Running on http://172.24.0.25:5000
 [33mPress CTRL+C to quit[0m
-127.0.0.1 - - [07/Jun/2026 08:02:50] "GET /login HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:00] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:06] "POST /api/scrape HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:08] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:10] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:12] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:14] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:16] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:18] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:20] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:22] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:24] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:26] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:28] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:28] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:05:30] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 08:06:00] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [07/Jun/2026 08:46:12] "GET /login HTTP/1.1" 200 -
+127.0.0.1 - - [07/Jun/2026 08:46:17] "POST /register HTTP/1.1" 200 -
+127.0.0.1 - - [07/Jun/2026 08:46:17] "POST /login HTTP/1.1" 200 -
+127.0.0.1 - - [07/Jun/2026 08:46:17] "GET /api/status HTTP/1.1" 200 -
