@@ -1,11 +1,10 @@
 """Gunicorn 配置 —— Render 部署用"""
 import os
 
-# 如果没有通过 Render 环境变量设置，在这里设置默认值
-# 优先使用 Supabase Session pooler，备选直连地址
-if not os.environ.get("DATABASE_URL"):
-    # Supabase Session Mode Pooler (推荐，跨区域可用)
-    os.environ["DATABASE_URL"] = "postgresql://postgres.pcsudvflktvoyljpajph:JhF4FwrVVXu8m9SB@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+# 强制使用 Supabase Pooler 地址（直连地址在项目暂停恢复后可能DNS不可达）
+# Pooler 地址更稳定，支持跨区域连接
+DATABASE_URL = "postgresql://postgres.pcsudvflktvoyljpajph:JhF4FwrVVXu8m9SB@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+os.environ["DATABASE_URL"] = DATABASE_URL
 
 if not os.environ.get("ADMIN_PWD"):
     os.environ["ADMIN_PWD"] = "cognition2026"

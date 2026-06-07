@@ -10,27 +10,38 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 USE_PG = False
 _PG_AVAILABLE = False
 
-def _try_pg_connect(url, retries=3, delay=2):
-    """尝试连接 PostgreSQL，支持重试和 SSL"""
+def _try_pg_connect(url, retries=2, delay=2):
+    """尝试连接 PostgreSQL，支持重试和 SSL，自动尝试多种地址"""
     import psycopg2
     from psycopg2.extras import RealDictCursor
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
-    for attempt in range(retries):
-        try:
-            # 添加 sslmode=require 防止连接被拒
-            connect_url = url
-            if "?" not in connect_url:
-                connect_url += "?sslmode=require"
-            elif "sslmode" not in connect_url:
-                connect_url += "&sslmode=require"
-            conn = psycopg2.connect(connect_url, cursor_factory=RealDictCursor, connect_timeout=10)
-            conn.close()
-            return True, url
-        except Exception as e:
-            print(f"  PG 连接尝试 {attempt+1}/{retries} 失败: {e}")
-            if attempt < retries - 1:
-                time.sleep(delay)
+
+    # 准备多个备选连接地址
+    urls_to_try = [url]
+    # 如果是 pooler 地址，加上直连备选
+    if "pooler.supabase.com" in url:
+        project_ref = url.split("@")[0].split(".postgres.")[-1] if ".postgres." in url else ""
+        if project_ref:
+            direct_url = url.replace(f"postgres.{project_ref}@", f"postgres:{url.split('@')[0].split(':')[-1]}@db.{project_ref}.supabase.co:5432")
+            urls_to_try.append(direct_url)
+
+    for try_url in urls_to_try:
+        for attempt in range(retries):
+            try:
+                # 添加 sslmode=require 防止连接被拒
+                connect_url = try_url
+                if "?" not in connect_url:
+                    connect_url += "?sslmode=require"
+                elif "sslmode" not in connect_url:
+                    connect_url += "&sslmode=require"
+                conn = psycopg2.connect(connect_url, cursor_factory=RealDictCursor, connect_timeout=8)
+                conn.close()
+                return True, try_url
+            except Exception as e:
+                print(f"  PG 连接尝试 {attempt+1}/{retries} 失败 ({try_url.split('@')[-1][:30] if '@' in try_url else try_url[:30]}): {e}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
     return False, url
 
 if DATABASE_URL:

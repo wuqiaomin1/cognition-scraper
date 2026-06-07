@@ -677,7 +677,44 @@ def api_debug():
             db_info["pg_connection"] = "OK"
         except Exception as e:
             db_info["pg_connection"] = f"FAIL: {e}"
+    else:
+        # 尝试手动连接 PG 看看能不能连
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            url = os.environ.get("DATABASE_URL", "")
+            if url:
+                if "?" not in url:
+                    url += "?sslmode=require"
+                elif "sslmode" not in url:
+                    url += "&sslmode=require"
+                conn = psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=5)
+                conn.close()
+                db_info["pg_manual_test"] = "OK - 可以连接但启动时失败了"
+            else:
+                db_info["pg_manual_test"] = "SKIP - 没有 DATABASE_URL"
+        except Exception as e:
+            db_info["pg_manual_test"] = f"FAIL: {e}"
     return jsonify(db_info)
+
+
+@app.route('/api/reconnect', methods=['POST'])
+def api_reconnect():
+    """强制重新尝试连接 PostgreSQL（无需重启服务）"""
+    global USE_PG, _PG_AVAILABLE, DATABASE_URL
+    from models import _try_pg_connect
+    DATABASE_URL = os.environ.get("DATABASE_URL", "")
+    if not DATABASE_URL:
+        return jsonify({"ok": False, "message": "没有 DATABASE_URL 环境变量"})
+    success, url = _try_pg_connect(DATABASE_URL)
+    if success:
+        USE_PG = True
+        _PG_AVAILABLE = True
+        # 重新初始化数据库表
+        from models import init_db
+        init_db()
+        return jsonify({"ok": True, "message": "PostgreSQL 连接成功！", "db_mode": "postgresql"})
+    return jsonify({"ok": False, "message": "PostgreSQL 连接仍然失败，请检查 Supabase 项目状态"})
 
 
 @app.route('/api/history')
