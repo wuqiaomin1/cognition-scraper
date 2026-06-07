@@ -279,19 +279,36 @@ def api_status():
     else:
         kb_stats = global_kb.get_stats()
 
-    # 获取最新日报
+    # 获取最新日报数据
     latest_data = None
     if history:
+        date_str = history[0].get("date", history[0].get("filename", "").replace("日报_", "").replace(".md", ""))
         try:
-            if USE_PG:
-                report = get_daily_report(history[0]["date"])
-                if report and report.get("data_json"):
-                    latest_data = report["data_json"]
-            else:
-                generator = ReportGeneratorV2(str(OUTPUT_DIR))
-                latest_data = generator.read_data(history[0]["date"])
-        except:
-            pass
+            # 尝试从JSON文件读取
+            data_path = OUTPUT_DIR / f"data_{date_str}.json"
+            if data_path.exists():
+                with open(data_path, 'r', encoding='utf-8') as f:
+                    latest_data = json.load(f)
+            # 如果JSON为空，从知识库构建
+            if not latest_data or not latest_data.get("categories"):
+                items = kb_search(limit=200) if USE_PG else global_kb.search("", limit=200)
+                if items:
+                    cats = {}
+                    for item in items:
+                        cat = item.get("category", "🌍 其他")
+                        if cat not in cats:
+                            cats[cat] = []
+                        cats[cat].append({
+                            "title": item.get("title", ""),
+                            "url": item.get("url", ""),
+                            "source": item.get("source", ""),
+                            "ai_summary": item.get("ai_summary", ""),
+                            "tags": item.get("tags", []),
+                            "priority": item.get("priority", "normal")
+                        })
+                    latest_data = {"date": date_str, "stats": {}, "categories": cats}
+        except Exception as e:
+            print(f"获取最新数据失败: {e}")
 
     return jsonify({
         "scrape_status": scrape_status,
