@@ -1,29 +1,13 @@
-// ========== 认知作弊情报系统 v5 多用户版 ==========
-// 功能：分类日报 + 原文链接 + AI小助手 + 一键导出知识库 + 多用户支持
+// ========== 认知作弊情报系统 v7 开放版 ==========
+// 功能：分类日报 + 原文链接 + AI小助手 + 一键导出知识库
 
 let pollTimer = null;
 let currentNoteItemId = null;
 let aiChatHistory = [];
 
-// ========== API 请求包装（401 自动跳转登录页）==========
+// ========== API 请求包装 ==========
 async function apiFetch(url, options = {}) {
-    const resp = await fetch(url, options);
-    if (resp.status === 401) {
-        window.location.href = '/login';
-        throw new Error('Unauthorized');
-    }
-    return resp;
-}
-
-// ========== 加载用户信息 ==========
-async function loadUserInfo() {
-    try {
-        const resp = await apiFetch('/api/user/info');
-        const data = await resp.json();
-        if (data.ok && data.user) {
-            document.getElementById('sidebarUser').textContent = data.user.display_name || data.user.username;
-        }
-    } catch (e) {}
+    return await fetch(url, options);
 }
 
 // ========== 页面切换 ==========

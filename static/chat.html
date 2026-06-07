@@ -339,12 +339,7 @@
         let chatHistory = [];
 
         async function apiFetch(url, options = {}) {
-            const resp = await fetch(url, options);
-            if (resp.status === 401) {
-                window.location.href = '/login';
-                throw new Error('Unauthorized');
-            }
-            return resp;
+            return await fetch(url, options);
         }
 
         async function refreshChat() {

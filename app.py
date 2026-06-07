@@ -1,4 +1,4 @@
-"""认知作弊信息抓取系统 v6 —— 多用户版 + 云数据库 + 持久化存储"""
+"""认知作弊信息抓取系统 v7 —— 开放版 + 云数据库持久化"""
 import os
 import json
 import smtplib
@@ -8,7 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, jsonify, request, send_from_directory
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from scraper import (
@@ -24,13 +24,9 @@ from models import (
     get_user_kb_state, toggle_user_favorite, save_user_note, mark_user_read,
     save_daily_report, get_daily_report, get_report_history, USE_PG
 )
-from auth import auth_bp, login_required
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'cognition-scraper-v6-2026')
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
-
-app.register_blueprint(auth_bp)
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'cognition-scraper-v7-2026')
 
 # 初始化数据库
 init_db()
@@ -44,17 +40,14 @@ scrape_status = {"running": False, "last_run": None, "progress": ""}
 # AI助手
 ai_assistant = AIAssistant(None)
 
+# 全局知识库（本地模式回退用）
+from scraper.knowledge_base import KnowledgeBase
+global_kb = KnowledgeBase(str(OUTPUT_DIR / "knowledge_base.json"))
 
-# ==================== 用户配置管理 ====================
+
+# ==================== 配置管理 ====================
 
 def get_current_config() -> dict:
-    user_id = session.get('user_id')
-    if user_id:
-        try:
-            row = get_user_config(user_id)
-            return row_to_config_dict(row)
-        except Exception:
-            pass
     return load_config()
 
 
@@ -102,20 +95,12 @@ def get_scrapers(sources: list[str] = None) -> dict:
     return all_scrapers
 
 
-def run_scrape(send_email: bool = False, user_id: int = None):
+def run_scrape(send_email: bool = False):
     global scrape_status
     scrape_status["running"] = True
 
     try:
-        if user_id:
-            try:
-                row = get_user_config(user_id)
-                cfg = row_to_config_dict(row)
-            except:
-                cfg = load_config()
-        else:
-            cfg = load_config()
-
+        cfg = load_config()
         sources = cfg.get("sources", [])
         scrapers = get_scrapers(sources)
 
@@ -133,18 +118,21 @@ def run_scrape(send_email: bool = False, user_id: int = None):
         # 2. 生成分类日报
         scrape_status["progress"] = "正在AI摘要与分类..."
         generator = ReportGeneratorV2(str(OUTPUT_DIR))
-        kb_stats = kb_get_stats()
+        kb_stats = kb_get_stats() if USE_PG else global_kb.get_stats()
         report_result = generator.generate(all_results, kb_stats)
 
-        # 3. 入知识库（数据库持久化）
+        # 3. 入知识库
         scrape_status["progress"] = "正在更新知识库..."
-        new_count = kb_batch_add(report_result["all_analyzed"])
+        if USE_PG:
+            new_count = kb_batch_add(report_result["all_analyzed"])
+        else:
+            new_count = global_kb.batch_add(report_result["all_analyzed"])
 
-        # 4. 保存日报到数据库
+        # 4. 保存日报
         today = datetime.now().strftime("%Y-%m-%d")
-        save_daily_report(today, report_result["markdown"], report_result.get("data", {}))
-
-        # 同时保存文件（兼容旧逻辑）
+        if USE_PG:
+            save_daily_report(today, report_result["markdown"], report_result.get("data", {}))
+        # 同时保存文件
         try:
             md_path = OUTPUT_DIR / f"日报_{today}.md"
             md_path.write_text(report_result["markdown"], encoding='utf-8')
@@ -215,46 +203,54 @@ def send_report_email(content: str, email_cfg: dict):
         print(f"邮件发送失败: {e}")
 
 
-# ==================== 页面路由 ====================
+# ==================== 页面路由（开放，无需登录）====================
 
 @app.route('/')
-@login_required
 def index():
     return send_from_directory('static', 'index.html')
 
 
 @app.route('/chat')
-@login_required
 def chat_page():
     return send_from_directory('static', 'chat.html')
 
 
-# ==================== API路由 ====================
+# ==================== API路由（开放）====================
 
 @app.route('/api/status')
-@login_required
 def api_status():
-    cfg = get_current_config()
+    cfg = load_config()
 
-    # 从数据库获取历史
-    try:
-        history = get_report_history(7)
-    except:
-        history = []
+    # 获取历史
+    if USE_PG:
+        try:
+            history = get_report_history(7)
+        except:
+            history = []
+    else:
+        generator = ReportGeneratorV2(str(OUTPUT_DIR))
+        history = generator.get_history(7)
 
     # 知识库统计
-    try:
-        kb_stats = kb_get_stats()
-    except:
-        kb_stats = {"total": 0, "categories": {}, "sources": {}}
+    if USE_PG:
+        try:
+            kb_stats = kb_get_stats()
+        except:
+            kb_stats = {"total": 0, "categories": {}, "sources": {}}
+    else:
+        kb_stats = global_kb.get_stats()
 
     # 获取最新日报
     latest_data = None
     if history:
         try:
-            report = get_daily_report(history[0]["date"])
-            if report and report.get("data_json"):
-                latest_data = report["data_json"]
+            if USE_PG:
+                report = get_daily_report(history[0]["date"])
+                if report and report.get("data_json"):
+                    latest_data = report["data_json"]
+            else:
+                generator = ReportGeneratorV2(str(OUTPUT_DIR))
+                latest_data = generator.read_data(history[0]["date"])
         except:
             pass
 
@@ -271,29 +267,25 @@ def api_status():
 
 
 @app.route('/api/scrape', methods=['POST'])
-@login_required
 def api_scrape():
     if scrape_status["running"]:
         return jsonify({"ok": False, "message": "抓取任务正在进行中"}), 409
 
     send_email = request.json.get("send_email", False)
-    user_id = session.get('user_id')
-    thread = threading.Thread(target=run_scrape, args=(send_email, user_id), daemon=True)
+    thread = threading.Thread(target=run_scrape, args=(send_email,), daemon=True)
     thread.start()
     return jsonify({"ok": True, "message": "抓取任务已启动"})
 
 
 @app.route('/api/report/<date_str>')
-@login_required
 def api_report(date_str):
-    # 先从数据库查
-    try:
-        report = get_daily_report(date_str)
-        if report and report.get("markdown"):
-            return jsonify({"ok": True, "content": report["markdown"]})
-    except:
-        pass
-    # 回退到文件
+    if USE_PG:
+        try:
+            report = get_daily_report(date_str)
+            if report and report.get("markdown"):
+                return jsonify({"ok": True, "content": report["markdown"]})
+        except:
+            pass
     md_path = OUTPUT_DIR / f"日报_{date_str}.md"
     if md_path.exists():
         return jsonify({"ok": True, "content": md_path.read_text(encoding='utf-8')})
@@ -301,14 +293,14 @@ def api_report(date_str):
 
 
 @app.route('/api/report/<date_str>/data')
-@login_required
 def api_report_data(date_str):
-    try:
-        report = get_daily_report(date_str)
-        if report and report.get("data_json"):
-            return jsonify({"ok": True, "data": report["data_json"]})
-    except:
-        pass
+    if USE_PG:
+        try:
+            report = get_daily_report(date_str)
+            if report and report.get("data_json"):
+                return jsonify({"ok": True, "data": report["data_json"]})
+        except:
+            pass
     data_path = OUTPUT_DIR / f"data_{date_str}.json"
     if data_path.exists():
         with open(data_path, 'r', encoding='utf-8') as f:
@@ -316,104 +308,78 @@ def api_report_data(date_str):
     return jsonify({"ok": False, "message": "数据不存在"}), 404
 
 
-# ==================== 知识库API ====================
+# ==================== 知识库API（开放）====================
 
 @app.route('/api/kb/search')
-@login_required
 def api_kb_search():
     query = request.args.get('q', '')
     category = request.args.get('category', '')
     favorite = request.args.get('favorite', '0') == '1'
     limit = int(request.args.get('limit', 50))
-    user_id = session.get('user_id')
 
-    try:
-        results = kb_search(query=query, category=category or None, limit=limit)
-    except:
-        results = []
+    if USE_PG:
+        try:
+            results = kb_search(query=query, category=category or None, limit=limit)
+        except:
+            results = []
+    else:
+        results = global_kb.search(query, category=category or None, favorite_only=favorite)
 
-    # 合并用户状态
-    if user_id and results:
-        user_state = get_user_kb_state(user_id)
-        for item in results:
-            item_id = item.get("id", "")
-            item["favorite"] = item_id in user_state.get("favorites", {})
-            item["notes"] = user_state.get("notes", {}).get(item_id, "")
-
-    if favorite:
+    if favorite and USE_PG:
         results = [r for r in results if r.get("favorite")]
 
-    return jsonify({"ok": True, "items": results, "total": len(results)})
+    return jsonify({"ok": True, "items": results[:limit], "total": len(results)})
 
 
 @app.route('/api/kb/stats')
-@login_required
 def api_kb_stats():
-    user_id = session.get('user_id')
-    try:
-        global_stats = kb_get_stats()
-    except:
-        global_stats = {"total": 0, "categories": {}, "sources": {}}
-
-    if user_id:
+    if USE_PG:
         try:
-            user_state = get_user_kb_state(user_id)
-            return jsonify({"ok": True, "stats": {
-                "total": global_stats.get("total", 0),
-                "favorites": len(user_state.get("favorites", {})),
-                "with_notes": len([v for v in user_state.get("notes", {}).values() if v]),
-                "categories": global_stats.get("categories", {}),
-                "sources": global_stats.get("sources", {}),
-                "last_updated": global_stats.get("last_updated", "")
-            }})
+            return jsonify({"ok": True, "stats": kb_get_stats()})
         except:
             pass
-    return jsonify({"ok": True, "stats": global_stats})
+    return jsonify({"ok": True, "stats": global_kb.get_stats()})
 
 
 @app.route('/api/kb/favorite/<item_id>', methods=['POST'])
-@login_required
 def api_kb_favorite(item_id):
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"ok": False, "message": "请先登录"}), 401
-    try:
-        is_fav = toggle_user_favorite(user_id, item_id)
-        return jsonify({"ok": True, "favorite": is_fav})
-    except Exception as e:
-        return jsonify({"ok": False, "message": str(e)}), 500
+    if USE_PG:
+        try:
+            is_fav = toggle_user_favorite(1, item_id)
+            return jsonify({"ok": True, "favorite": is_fav})
+        except Exception as e:
+            return jsonify({"ok": False, "message": str(e)}), 500
+    global_kb.favorite(item_id)
+    return jsonify({"ok": True, "favorite": True})
 
 
 @app.route('/api/kb/note/<item_id>', methods=['POST'])
-@login_required
 def api_kb_note(item_id):
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"ok": False, "message": "请先登录"}), 401
     note = request.json.get('note', '')
-    try:
-        save_user_note(user_id, item_id, note)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "message": str(e)}), 500
+    if USE_PG:
+        try:
+            save_user_note(1, item_id, note)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "message": str(e)}), 500
+    global_kb.add_note(item_id, note)
+    return jsonify({"ok": True})
 
 
 @app.route('/api/kb/read/<item_id>', methods=['POST'])
-@login_required
 def api_kb_read(item_id):
-    user_id = session.get('user_id')
-    if user_id:
+    if USE_PG:
         try:
-            mark_user_read(user_id, item_id)
+            mark_user_read(1, item_id)
         except:
             pass
+    else:
+        global_kb.mark_read(item_id)
     return jsonify({"ok": True})
 
 
 @app.route('/api/kb/save', methods=['POST'])
-@login_required
 def api_kb_save():
-    user_id = session.get('user_id')
     item = {
         "title": request.json.get("title", ""),
         "ai_summary": request.json.get("ai_summary", ""),
@@ -423,20 +389,25 @@ def api_kb_save():
         "tags": request.json.get("tags", []),
         "priority": request.json.get("priority", "normal")
     }
-    item_id = kb_add(item)
-
-    if user_id:
-        toggle_user_favorite(user_id, item_id)
-
+    if USE_PG:
+        item_id = kb_add(item)
+    else:
+        item_id = global_kb.add(item)
     return jsonify({"ok": True, "id": item_id})
 
 
 @app.route('/api/kb/export', methods=['POST'])
-@login_required
 def api_kb_export():
     fmt = request.json.get('format', 'markdown')
     try:
-        items = kb_export_all()
+        if USE_PG:
+            items = kb_export_all()
+        else:
+            path = global_kb.export_file(fmt)
+            if path:
+                return jsonify({"ok": True, "path": path, "filename": Path(path).name})
+            return jsonify({"ok": False, "message": "导出失败"}), 500
+
         if fmt == "json":
             filename = OUTPUT_DIR / f"knowledge_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             filename.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -459,47 +430,37 @@ def api_kb_export():
 
 
 @app.route('/api/kb/categories')
-@login_required
 def api_kb_categories():
     cats = []
     for name, info in CATEGORIES.items():
         try:
-            count = len(kb_get_by_category(name))
+            if USE_PG:
+                count = len(kb_get_by_category(name))
+            else:
+                count = len(global_kb.get_by_category(name))
         except:
             count = 0
         cats.append({"name": name, "desc": info.get("desc", ""), "count": count})
     return jsonify({"ok": True, "categories": cats})
 
 
-@app.route('/api/debug')
-def api_debug():
-    """调试接口 - 检查环境变量（部署后删除）"""
-    db_url = os.environ.get("DATABASE_URL", "")
-    return jsonify({
-        "db_mode": "postgresql" if USE_PG else "sqlite",
-        "DATABASE_URL_set": bool(db_url),
-        "DATABASE_URL_prefix": db_url[:30] + "..." if db_url else "NOT SET",
-        "all_env_keys": [k for k in os.environ.keys() if not k.startswith("_")]
-    })
-
-
 # ==================== AI助手API ====================
 
 @app.route('/api/ai/chat', methods=['POST'])
-@login_required
 def api_ai_chat():
     question = request.json.get('question', '')
     history = request.json.get('history', [])
     if not question.strip():
         return jsonify({"ok": False, "answer": "请输入你的问题"})
     try:
-        # 构造一个兼容的知识库给 AI 助手
-        from scraper.knowledge_base import KnowledgeBase
-        tmp_kb = KnowledgeBase(str(OUTPUT_DIR / "tmp_kb.json"))
-        items = kb_search(limit=200)
-        for item in items:
-            tmp_kb.add(item)
-        ai_assistant.kb = tmp_kb
+        if USE_PG:
+            tmp_kb = KnowledgeBase(str(OUTPUT_DIR / "tmp_kb.json"))
+            items = kb_search(limit=200)
+            for item in items:
+                tmp_kb.add(item)
+            ai_assistant.kb = tmp_kb
+        else:
+            ai_assistant.kb = global_kb
         answer = ai_assistant.chat(question, history)
         return jsonify({"ok": True, "answer": answer})
     except Exception as e:
@@ -509,29 +470,38 @@ def api_ai_chat():
 # ==================== 微信推送API ====================
 
 @app.route('/api/wechat/push', methods=['POST'])
-@login_required
 def api_wechat_push():
-    cfg = get_current_config()
+    cfg = load_config()
     wechat_cfg = cfg.get("wechat", {})
     if not wechat_cfg.get("enabled") or not wechat_cfg.get("webhook_url"):
         return jsonify({"ok": False, "message": "请先在设置中配置企业微信Webhook地址并启用"}), 400
     try:
-        history = get_report_history(1)
-        if not history:
-            return jsonify({"ok": False, "message": "还没有日报数据，请先执行一次抓取"}), 400
-        report = get_daily_report(history[0]["date"])
-        if not report or not report.get("data_json"):
-            return jsonify({"ok": False, "message": "日报数据加载失败"}), 500
+        if USE_PG:
+            history = get_report_history(1)
+            if not history:
+                return jsonify({"ok": False, "message": "还没有日报数据，请先执行一次抓取"}), 400
+            report = get_daily_report(history[0]["date"])
+            if not report or not report.get("data_json"):
+                return jsonify({"ok": False, "message": "日报数据加载失败"}), 500
+            report_data = report["data_json"]
+        else:
+            generator = ReportGeneratorV2(str(OUTPUT_DIR))
+            history = generator.get_history(1)
+            if not history:
+                return jsonify({"ok": False, "message": "还没有日报数据，请先执行一次抓取"}), 400
+            report_data = generator.read_data(history[0]["date"])
+            if not report_data:
+                return jsonify({"ok": False, "message": "日报数据加载失败"}), 500
+
         pusher = WeChatPusher(wechat_cfg["webhook_url"])
         push_cats = wechat_cfg.get("push_categories", []) or None
-        result = pusher.push_daily_report(report["data_json"], push_cats)
+        result = pusher.push_daily_report(report_data, push_cats)
         return jsonify({"ok": result["ok"], "sent": result["sent"], "failed": result["failed"]})
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
 
 
 @app.route('/api/wechat/test', methods=['POST'])
-@login_required
 def api_wechat_test():
     webhook_url = request.json.get('webhook_url', '')
     if not webhook_url:
@@ -545,20 +515,33 @@ def api_wechat_test():
 
 
 @app.route('/api/wechat/messages')
-@login_required
 def api_wechat_messages():
     try:
-        history = get_report_history(1)
-        if not history:
-            return jsonify({"ok": True, "messages": [{
-                "role": "assistant", "type": "text",
-                "content": "你好！我还没抓到今天的消息呢。\n\n点击「立即抓取」按钮来获取今日情报吧！"
-            }]})
-        report = get_daily_report(history[0]["date"])
-        if not report or not report.get("data_json"):
-            return jsonify({"ok": False, "messages": []}), 500
-        messages = format_wechat_chat_message(report["data_json"])
-        return jsonify({"ok": True, "messages": messages, "date": history[0]["date"]})
+        if USE_PG:
+            history = get_report_history(1)
+            if not history:
+                return jsonify({"ok": True, "messages": [{
+                    "role": "assistant", "type": "text",
+                    "content": "你好！我还没抓到今天的消息呢。\n\n点击「立即抓取」按钮来获取今日情报吧！"
+                }]})
+            report = get_daily_report(history[0]["date"])
+            if not report or not report.get("data_json"):
+                return jsonify({"ok": False, "messages": []}), 500
+            messages = format_wechat_chat_message(report["data_json"])
+            return jsonify({"ok": True, "messages": messages, "date": history[0]["date"]})
+        else:
+            generator = ReportGeneratorV2(str(OUTPUT_DIR))
+            history = generator.get_history(1)
+            if not history:
+                return jsonify({"ok": True, "messages": [{
+                    "role": "assistant", "type": "text",
+                    "content": "你好！我还没抓到今天的消息呢。\n\n点击「立即抓取」按钮来获取今日情报吧！"
+                }]})
+            report_data = generator.read_data(history[0]["date"])
+            if not report_data:
+                return jsonify({"ok": False, "messages": []}), 500
+            messages = format_wechat_chat_message(report_data)
+            return jsonify({"ok": True, "messages": messages, "date": history[0]["date"]})
     except Exception as e:
         return jsonify({"ok": True, "messages": [{
             "role": "assistant", "type": "text",
@@ -569,95 +552,69 @@ def api_wechat_messages():
 # ==================== 配置API ====================
 
 @app.route('/api/config', methods=['GET', 'POST'])
-@login_required
 def api_config():
     if request.method == 'GET':
-        cfg = get_current_config()
+        cfg = load_config()
         if cfg.get("email", {}).get("password"):
             cfg["email"]["password"] = "******"
         return jsonify(cfg)
 
     new_cfg = request.json
     if new_cfg:
-        user_id = session.get('user_id')
-        if user_id:
-            if new_cfg.get("email", {}).get("password") == "******":
-                try:
-                    row = get_user_config(user_id)
-                    old_cfg = row_to_config_dict(row)
-                    new_cfg["email"]["password"] = old_cfg.get("email", {}).get("password", "")
-                except:
-                    pass
-            save_user_config(user_id, new_cfg)
-        else:
-            if new_cfg.get("email", {}).get("password") == "******":
-                old_cfg = load_config()
-                new_cfg["email"]["password"] = old_cfg.get("email", {}).get("password", "")
-            save_config(new_cfg)
-        update_scheduler_for_user(user_id, new_cfg.get("schedule", {}))
+        if new_cfg.get("email", {}).get("password") == "******":
+            old_cfg = load_config()
+            new_cfg["email"]["password"] = old_cfg.get("email", {}).get("password", "")
+        save_config(new_cfg)
+        update_scheduler(new_cfg.get("schedule", {}))
         return jsonify({"ok": True, "message": "配置已保存"})
     return jsonify({"ok": False}), 400
 
 
 @app.route('/api/history')
-@login_required
 def api_history():
-    try:
-        history = get_report_history(30)
-    except:
-        history = []
+    if USE_PG:
+        try:
+            history = get_report_history(30)
+        except:
+            history = []
+    else:
+        generator = ReportGeneratorV2(str(OUTPUT_DIR))
+        history = generator.get_history(30)
     return jsonify({"ok": True, "history": history})
 
 
 @app.route('/api/reports/<filename>')
-@login_required
 def api_report_file(filename):
     return send_from_directory(str(OUTPUT_DIR), filename)
 
 
 # ==================== 定时任务 ====================
 
-def update_scheduler_for_user(user_id: int, schedule_cfg: dict):
-    job_id = f"daily_scrape_{user_id}" if user_id else "daily_scrape"
+def update_scheduler(schedule_cfg: dict):
+    job_id = "daily_scrape"
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
     if schedule_cfg.get("enabled", True):
         hour = schedule_cfg.get("hour", 8)
         minute = schedule_cfg.get("minute", 0)
-        def job_func():
-            return run_scrape(send_email=True, user_id=user_id)
         scheduler.add_job(
-            job_func, 'cron', hour=hour, minute=minute,
-            id=job_id, name=f'每日信息抓取(用户{user_id})'
+            run_scrape, 'cron', hour=hour, minute=minute,
+            id=job_id, name='每日信息抓取',
+            kwargs={"send_email": True}
         )
 
 
 def init_scheduler():
     cfg = load_config()
-    update_scheduler_for_user(None, cfg.get("schedule", {}))
-    try:
-        from models import get_db
-        db = get_db()
-        rows = db.execute(
-            "SELECT u.id, uc.schedule_enabled, uc.schedule_hour, uc.schedule_minute "
-            "FROM users u JOIN user_config uc ON u.id=uc.user_id "
-            "WHERE uc.schedule_enabled=1"
-        ).fetchall()
-        db.close()
-        for row in rows:
-            d = dict(row)
-            schedule_cfg = {"enabled": bool(d["schedule_enabled"]), "hour": d["schedule_hour"], "minute": d["schedule_minute"]}
-            update_scheduler_for_user(d["id"], schedule_cfg)
-    except Exception as e:
-        print(f"初始化用户定时任务失败: {e}")
+    update_scheduler(cfg.get("schedule", {}))
     scheduler.start()
 
 
 if __name__ == '__main__':
     print("=" * 50)
-    print("认知作弊信息抓取系统 v6 多用户版")
+    print("认知作弊信息抓取系统 v7 开放版")
     print(f"  数据库: {'PostgreSQL' if USE_PG else 'SQLite'}")
-    print("  用户系统 | 知识库隔离 | AI分类摘要 | 分类日报")
+    print("  开放访问 | AI分类摘要 | 分类日报 | 邮件推送")
     print("=" * 50)
     init_scheduler()
     print(f"输出目录: {OUTPUT_DIR}")
