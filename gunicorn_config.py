@@ -1,10 +1,9 @@
 """Gunicorn 配置 —— Render 部署用"""
 import os
 
-# 强制使用 Supabase Pooler 地址（直连地址在项目暂停恢复后可能DNS不可达）
-# Pooler 地址更稳定，支持跨区域连接
-DATABASE_URL = "postgresql://postgres.pcsudvflktvoyljpajph:JhF4FwrVVXu8m9SB@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
-os.environ["DATABASE_URL"] = DATABASE_URL
+# 使用 Supabase 直连地址（Dashboard 获取的官方连接字符串）
+# 直连用纯用户名 postgres，Pooler 才需要 postgres.xxx 格式
+os.environ["DATABASE_URL"] = "postgresql://postgres:JhF4FwrVVXu8m9SB@db.pcsudvflktvoyljpajph.supabase.co:5432/postgres"
 
 if not os.environ.get("ADMIN_PWD"):
     os.environ["ADMIN_PWD"] = "cognition2026"
