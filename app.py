@@ -150,14 +150,33 @@ def run_scrape(send_email: bool = False):
 
         # 4. 保存日报
         today = datetime.now().strftime("%Y-%m-%d")
+        # 构造前端需要的JSON数据
+        report_data = {
+            "date": today,
+            "stats": report_result.get("stats", {}),
+            "categories": {
+                cat: [
+                    {
+                        "title": i.get("title", ""),
+                        "url": i.get("url", ""),
+                        "source": i.get("source", ""),
+                        "ai_summary": i.get("ai_summary", ""),
+                        "tags": i.get("tags", []),
+                        "priority": i.get("priority", "normal")
+                    }
+                    for i in items
+                ]
+                for cat, items in report_result.get("categories", {}).items()
+            }
+        }
         if USE_PG:
-            save_daily_report(today, report_result["markdown"], report_result.get("data", {}))
+            save_daily_report(today, report_result["markdown"], report_data)
         # 同时保存文件
         try:
             md_path = OUTPUT_DIR / f"日报_{today}.md"
             md_path.write_text(report_result["markdown"], encoding='utf-8')
             data_path = OUTPUT_DIR / f"data_{today}.json"
-            data_path.write_text(json.dumps(report_result.get("data", {}), ensure_ascii=False, indent=2), encoding='utf-8')
+            data_path.write_text(json.dumps(report_data, ensure_ascii=False, indent=2), encoding='utf-8')
             latest_path = OUTPUT_DIR / "latest.md"
             latest_path.write_text(report_result["markdown"], encoding='utf-8')
         except Exception as e:
