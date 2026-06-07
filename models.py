@@ -1,36 +1,68 @@
 """数据库操作层 —— 支持 PostgreSQL (Supabase) + SQLite 双模式"""
 import os
 import json
+import time
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # 检测数据库类型
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-USE_PG = False  # 先默认 SQLite，init_db 时再检测
-
+USE_PG = False
 _PG_AVAILABLE = False
 
+def _try_pg_connect(url, retries=3, delay=2):
+    """尝试连接 PostgreSQL，支持重试和 SSL"""
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    for attempt in range(retries):
+        try:
+            # 添加 sslmode=require 防止连接被拒
+            connect_url = url
+            if "?" not in connect_url:
+                connect_url += "?sslmode=require"
+            elif "sslmode" not in connect_url:
+                connect_url += "&sslmode=require"
+            conn = psycopg2.connect(connect_url, cursor_factory=RealDictCursor, connect_timeout=10)
+            conn.close()
+            return True, url
+        except Exception as e:
+            print(f"  PG 连接尝试 {attempt+1}/{retries} 失败: {e}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+    return False, url
+
 if DATABASE_URL:
-    try:
-        import psycopg2
-        from psycopg2.extras import RealDictCursor
-        if DATABASE_URL.startswith("postgres://"):
-            DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-        # 测试连接
-        _test_conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=5)
-        _test_conn.close()
+    success, DATABASE_URL = _try_pg_connect(DATABASE_URL)
+    if success:
         _PG_AVAILABLE = True
         USE_PG = True
         print(f"✅ PostgreSQL 连接成功")
-    except Exception as e:
-        print(f"⚠️ PostgreSQL 连接失败，降级到 SQLite: {e}")
+    else:
+        print(f"⚠️ PostgreSQL 连接失败（已重试3次），降级到 SQLite")
         USE_PG = False
 
 if USE_PG:
     def get_db():
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-        conn.autocommit = False
-        return conn
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        connect_url = DATABASE_URL
+        if "?" not in connect_url:
+            connect_url += "?sslmode=require"
+        elif "sslmode" not in connect_url:
+            connect_url += "&sslmode=require"
+        try:
+            conn = psycopg2.connect(connect_url, cursor_factory=RealDictCursor, connect_timeout=10)
+            conn.autocommit = False
+            return conn
+        except Exception as e:
+            print(f"PG 连接失败，尝试重连: {e}")
+            # 重试一次
+            time.sleep(1)
+            conn = psycopg2.connect(connect_url, cursor_factory=RealDictCursor, connect_timeout=10)
+            conn.autocommit = False
+            return conn
 
     PH = "%s"
 else:

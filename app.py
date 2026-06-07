@@ -648,6 +648,38 @@ def api_config():
     return jsonify({"ok": False}), 400
 
 
+@app.route('/api/debug')
+def api_debug():
+    """数据库连接诊断"""
+    db_info = {
+        "db_mode": "postgresql" if USE_PG else "sqlite",
+        "pg_available": USE_PG,
+        "database_url_set": bool(os.environ.get("DATABASE_URL", "")),
+    }
+    if USE_PG:
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            url = os.environ.get("DATABASE_URL", "")
+            if "?" not in url:
+                url += "?sslmode=require"
+            elif "sslmode" not in url:
+                url += "&sslmode=require"
+            conn = psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=5)
+            cur = conn.cursor()
+            cur.execute("SELECT version();")
+            ver = cur.fetchone()
+            db_info["pg_version"] = str(ver)
+            cur.execute("SELECT COUNT(*) as cnt FROM kb_items;")
+            cnt = cur.fetchone()
+            db_info["pg_kb_count"] = cnt["cnt"] if cnt else 0
+            conn.close()
+            db_info["pg_connection"] = "OK"
+        except Exception as e:
+            db_info["pg_connection"] = f"FAIL: {e}"
+    return jsonify(db_info)
+
+
 @app.route('/api/history')
 def api_history():
     if USE_PG:
