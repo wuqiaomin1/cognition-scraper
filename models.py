@@ -11,25 +11,47 @@ USE_PG = False
 _PG_AVAILABLE = False
 
 def _try_pg_connect(url, retries=2, delay=2):
-    """尝试连接 PostgreSQL，支持重试和 SSL，自动尝试多种地址"""
+    """尝试连接 PostgreSQL，自动在直连(IPv6)和Pooler(IPv4)之间切换"""
     import psycopg2
     from psycopg2.extras import RealDictCursor
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
 
-    # 准备多个备选连接地址
+    # 准备备选连接地址
     urls_to_try = [url]
-    # 如果是 pooler 地址，加上直连备选
+
+    # 如果是直连地址(db.xxx.supabase.co)，自动生成 Pooler 地址作为备选
+    # 因为 Render 等 PaaS 不支持 IPv6，直连 Supabase 会 Network unreachable
+    if "db." in url and ".supabase.co" in url:
+        try:
+            # 从直连地址提取 project-ref 和密码
+            # 直连格式: postgresql://postgres:PASSWORD@db.REF.supabase.co:5432/postgres
+            at_split = url.split("@")
+            user_pwd = at_split[0].split("://")[1]  # postgres:PASSWORD
+            password = user_pwd.split(":", 1)[1]
+            ref = at_split[1].split(".supabase.co")[0].replace("db.", "")
+            # 生成多个区域的 Pooler 地址
+            for region in ["aws-0-ap-southeast-1", "aws-0-us-east-1", "aws-0-us-west-1", "aws-0-eu-west-1"]:
+                pooler_url = f"postgresql://postgres.{ref}:{password}@{region}.pooler.supabase.com:5432/postgres"
+                urls_to_try.append(pooler_url)
+        except Exception as e:
+            print(f"  生成 Pooler 地址失败: {e}")
+
+    # 如果是 Pooler 地址，也尝试直连作为备选
     if "pooler.supabase.com" in url:
-        project_ref = url.split("@")[0].split(".postgres.")[-1] if ".postgres." in url else ""
-        if project_ref:
-            direct_url = url.replace(f"postgres.{project_ref}@", f"postgres:{url.split('@')[0].split(':')[-1]}@db.{project_ref}.supabase.co:5432")
-            urls_to_try.append(direct_url)
+        try:
+            user_pwd_part = url.split("://")[1].split("@")[0]
+            ref = user_pwd_part.split(".postgres.")[1] if ".postgres." in user_pwd_part else user_pwd_part.split(".", 1)[1] if "." in user_pwd_part else ""
+            password = user_pwd_part.split(":", 1)[1] if ":" in user_pwd_part else ""
+            if ref and password:
+                direct_url = f"postgresql://postgres:{password}@db.{ref}.supabase.co:5432/postgres"
+                urls_to_try.append(direct_url)
+        except Exception as e:
+            print(f"  生成直连地址失败: {e}")
 
     for try_url in urls_to_try:
         for attempt in range(retries):
             try:
-                # 添加 sslmode=require 防止连接被拒
                 connect_url = try_url
                 if "?" not in connect_url:
                     connect_url += "?sslmode=require"
@@ -37,9 +59,11 @@ def _try_pg_connect(url, retries=2, delay=2):
                     connect_url += "&sslmode=require"
                 conn = psycopg2.connect(connect_url, cursor_factory=RealDictCursor, connect_timeout=8)
                 conn.close()
+                print(f"  ✅ 连接成功: {try_url.split('@')[1][:40] if '@' in try_url else try_url[:40]}")
                 return True, try_url
             except Exception as e:
-                print(f"  PG 连接尝试 {attempt+1}/{retries} 失败 ({try_url.split('@')[-1][:30] if '@' in try_url else try_url[:30]}): {e}")
+                short = try_url.split("@")[1][:30] if "@" in try_url else try_url[:30]
+                print(f"  PG 尝试 {attempt+1}/{retries} ({short}): {str(e)[:60]}")
                 if attempt < retries - 1:
                     time.sleep(delay)
     return False, url
