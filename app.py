@@ -37,7 +37,12 @@ def admin_required(f):
     from functools import wraps
     @wraps(f)
     def decorated(*args, **kwargs):
-        pwd = request.headers.get("X-Admin-Pwd", "") or request.json.get("admin_pwd", "") if request.is_json else request.headers.get("X-Admin-Pwd", "")
+        pwd = request.headers.get("X-Admin-Pwd", "")
+        if not pwd and request.is_json:
+            try:
+                pwd = request.json.get("admin_pwd", "")
+            except:
+                pass
         if pwd != ADMIN_PWD:
             return jsonify({"ok": False, "message": "需要管理员密码"}), 403
         return f(*args, **kwargs)
