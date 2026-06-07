@@ -59,9 +59,10 @@ async function refreshDashboard() {
             status.last_run ? `上次抓取: ${status.last_run}` : '尚未执行抓取';
         
         if (data.latest_data) {
-            const cats = data.latest_data.stats.categories || {};
+            const cats = (data.latest_data.stats && data.latest_data.stats.categories) || {};
+            const total = data.latest_data.stats?.total || Object.values(data.latest_data.categories || {}).flat().length;
             document.getElementById('todayStats').innerHTML = `
-                <div class="stat-card"><span class="stat-num">${data.latest_data.stats.total || 0}</span><span class="stat-label">总条数</span></div>
+                <div class="stat-card"><span class="stat-num">${total}</span><span class="stat-label">总条数</span></div>
                 <div class="stat-card"><span class="stat-num">${cats['🤖 AI/技术'] || 0}</span><span class="stat-label">🤖 AI/技术</span></div>
                 <div class="stat-card"><span class="stat-num">${cats['💼 商业/创业'] || 0}</span><span class="stat-label">💼 商业/创业</span></div>
                 <div class="stat-card"><span class="stat-num">${cats['🏛️ 政策/宏观'] || 0}</span><span class="stat-label">🏛️ 政策/宏观</span></div>
@@ -443,6 +444,10 @@ async function exportKnowledge(format) {
 async function loadSettings() {
     try {
         const resp = await apiFetch('/api/config');
+        if (resp.status === 403) {
+            showToast('设置需要管理员密码', 'info');
+            return;
+        }
         const cfg = await resp.json();
         document.querySelectorAll('#sourceCheckboxes input').forEach(cb => { cb.checked = cfg.sources.includes(cb.value); });
         document.getElementById('scheduleEnabled').checked = cfg.schedule?.enabled !== false;
@@ -551,7 +556,6 @@ document.addEventListener('keydown', function(e) {
 
 // ========== 初始化 ==========
 document.addEventListener('DOMContentLoaded', () => {
-    loadUserInfo();
     refreshDashboard();
     document.getElementById('emailEnabled')?.addEventListener('change', toggleEmailConfig);
     setInterval(refreshDashboard, 30000);
