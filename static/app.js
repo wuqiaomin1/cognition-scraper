@@ -4,10 +4,27 @@
 let pollTimer = null;
 let currentNoteItemId = null;
 let aiChatHistory = [];
+let adminPwd = localStorage.getItem('admin_pwd') || '';
 
-// ========== API 请求包装 ==========
+// ========== 管理员密码 ==========
+function getAdminHeaders() {
+    return adminPwd ? { 'X-Admin-Pwd': adminPwd } : {};
+}
+
 async function apiFetch(url, options = {}) {
-    return await fetch(url, options);
+    if (!options.headers) options.headers = {};
+    Object.assign(options.headers, getAdminHeaders());
+    const resp = await fetch(url, options);
+    if (resp.status === 403) {
+        const pwd = prompt('⚠️ 此操作需要管理员密码：');
+        if (pwd) {
+            adminPwd = pwd;
+            localStorage.setItem('admin_pwd', pwd);
+            options.headers['X-Admin-Pwd'] = pwd;
+            return fetch(url, options);
+        }
+    }
+    return resp;
 }
 
 // ========== 页面切换 ==========

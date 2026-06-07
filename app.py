@@ -28,6 +28,21 @@ from models import (
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'cognition-scraper-v7-2026')
 
+# 管理员密码（通过环境变量 ADMIN_PWD 设置，默认 cognition2026）
+ADMIN_PWD = os.environ.get("ADMIN_PWD", "cognition2026")
+
+
+def admin_required(f):
+    """管理操作（抓取、设置、导出）需要验证密码"""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        pwd = request.headers.get("X-Admin-Pwd", "") or request.json.get("admin_pwd", "") if request.is_json else request.headers.get("X-Admin-Pwd", "")
+        if pwd != ADMIN_PWD:
+            return jsonify({"ok": False, "message": "需要管理员密码"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
 # 初始化数据库
 init_db()
 
@@ -267,6 +282,7 @@ def api_status():
 
 
 @app.route('/api/scrape', methods=['POST'])
+@admin_required
 def api_scrape():
     if scrape_status["running"]:
         return jsonify({"ok": False, "message": "抓取任务正在进行中"}), 409
@@ -342,6 +358,7 @@ def api_kb_stats():
 
 
 @app.route('/api/kb/favorite/<item_id>', methods=['POST'])
+@admin_required
 def api_kb_favorite(item_id):
     if USE_PG:
         try:
@@ -354,6 +371,7 @@ def api_kb_favorite(item_id):
 
 
 @app.route('/api/kb/note/<item_id>', methods=['POST'])
+@admin_required
 def api_kb_note(item_id):
     note = request.json.get('note', '')
     if USE_PG:
@@ -379,6 +397,7 @@ def api_kb_read(item_id):
 
 
 @app.route('/api/kb/save', methods=['POST'])
+@admin_required
 def api_kb_save():
     item = {
         "title": request.json.get("title", ""),
@@ -397,6 +416,7 @@ def api_kb_save():
 
 
 @app.route('/api/kb/export', methods=['POST'])
+@admin_required
 def api_kb_export():
     fmt = request.json.get('format', 'markdown')
     try:
@@ -470,6 +490,7 @@ def api_ai_chat():
 # ==================== 微信推送API ====================
 
 @app.route('/api/wechat/push', methods=['POST'])
+@admin_required
 def api_wechat_push():
     cfg = load_config()
     wechat_cfg = cfg.get("wechat", {})
@@ -502,6 +523,7 @@ def api_wechat_push():
 
 
 @app.route('/api/wechat/test', methods=['POST'])
+@admin_required
 def api_wechat_test():
     webhook_url = request.json.get('webhook_url', '')
     if not webhook_url:
@@ -552,6 +574,7 @@ def api_wechat_messages():
 # ==================== 配置API ====================
 
 @app.route('/api/config', methods=['GET', 'POST'])
+@admin_required
 def api_config():
     if request.method == 'GET':
         cfg = load_config()

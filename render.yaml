@@ -11,3 +11,7 @@ services:
         value: 3.11.0
       - key: FLASK_SECRET_KEY
         generateValue: true
+      - key: DATABASE_URL
+        value: postgresql://postgres:JhF4FwrVVXu8m9SB@db.pcsudvflktvoyljpajph.supabase.co:5432/postgres
+      - key: ADMIN_PWD
+        value: cognition2026
