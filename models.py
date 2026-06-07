@@ -6,21 +6,32 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 # 检测数据库类型
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-USE_PG = bool(DATABASE_URL)
+USE_PG = False  # 先默认 SQLite，init_db 时再检测
+
+_PG_AVAILABLE = False
+
+if DATABASE_URL:
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        if DATABASE_URL.startswith("postgres://"):
+            DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        # 测试连接
+        _test_conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=5)
+        _test_conn.close()
+        _PG_AVAILABLE = True
+        USE_PG = True
+        print(f"✅ PostgreSQL 连接成功")
+    except Exception as e:
+        print(f"⚠️ PostgreSQL 连接失败，降级到 SQLite: {e}")
+        USE_PG = False
 
 if USE_PG:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    # Supabase/Render 的 DATABASE_URL 可能是 postgres://，psycopg2 需要 postgresql://
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
     def get_db():
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
         conn.autocommit = False
         return conn
 
-    # 参数占位符
     PH = "%s"
 else:
     import sqlite3
