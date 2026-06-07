@@ -29,6 +29,9 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 # 注册认证蓝图
 app.register_blueprint(auth_bp)
 
+# 初始化数据库（gunicorn 不会走 __main__，必须模块级别执行）
+init_db()
+
 CONFIG_FILE = Path(__file__).parent / "config.json"
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -237,10 +240,15 @@ def send_report_email(content: str, email_cfg: dict):
 
         msg.attach(MIMEText(html_content, 'html', 'utf-8'))
 
-        with smtplib.SMTP(email_cfg['smtp_host'], email_cfg['smtp_port'], timeout=30) as server:
+        port = email_cfg['smtp_port']
+        if port == 465:
+            server = smtplib.SMTP_SSL(email_cfg['smtp_host'], port, timeout=30)
+        else:
+            server = smtplib.SMTP(email_cfg['smtp_host'], port, timeout=30)
             server.starttls()
-            server.login(email_cfg['sender'], email_cfg['password'])
-            server.send_message(msg)
+        server.login(email_cfg['sender'], email_cfg['password'])
+        server.send_message(msg)
+        server.quit()
 
         print(f"邮件发送成功")
     except Exception as e:
