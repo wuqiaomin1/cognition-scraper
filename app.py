@@ -284,14 +284,23 @@ def api_status():
     if history:
         date_str = history[0].get("date", history[0].get("filename", "").replace("日报_", "").replace(".md", ""))
         try:
-            # 尝试从JSON文件读取
+            # 先尝试从JSON文件读取
             data_path = OUTPUT_DIR / f"data_{date_str}.json"
             if data_path.exists():
                 with open(data_path, 'r', encoding='utf-8') as f:
-                    latest_data = json.load(f)
-            # 如果JSON为空，从知识库构建
-            if not latest_data or not latest_data.get("categories"):
-                items = kb_search(limit=200) if USE_PG else global_kb.search("", limit=200)
+                    file_data = json.load(f)
+                if file_data and file_data.get("categories"):
+                    latest_data = file_data
+        except:
+            pass
+
+        # 如果JSON为空，从知识库构建
+        if not latest_data or not latest_data.get("categories"):
+            try:
+                if USE_PG:
+                    items = kb_search(limit=200)
+                else:
+                    items = global_kb.search("")
                 if items:
                     cats = {}
                     for item in items:
@@ -307,8 +316,13 @@ def api_status():
                             "priority": item.get("priority", "normal")
                         })
                     latest_data = {"date": date_str, "stats": {}, "categories": cats}
-        except Exception as e:
-            print(f"获取最新数据失败: {e}")
+                    # 保存回文件以便下次直接读取
+                    try:
+                        data_path.write_text(json.dumps(latest_data, ensure_ascii=False, indent=2), encoding='utf-8')
+                    except:
+                        pass
+            except Exception as e:
+                print(f"从知识库构建数据失败: {e}")
 
     return jsonify({
         "scrape_status": scrape_status,

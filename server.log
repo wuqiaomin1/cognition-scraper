@@ -13,9 +13,4 @@ Web界面: http://localhost:5000
  * Running on http://127.0.0.1:5000
  * Running on http://172.24.0.25:5000
 [33mPress CTRL+C to quit[0m
-127.0.0.1 - - [07/Jun/2026 09:26:46] "GET / HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 09:26:46] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 09:26:46] "[31m[1mPOST /api/scrape HTTP/1.1[0m" 403 -
-127.0.0.1 - - [07/Jun/2026 09:26:46] "POST /api/scrape HTTP/1.1" 200 -
-127.0.0.1 - - [07/Jun/2026 09:26:46] "[31m[1mGET /api/config HTTP/1.1[0m" 403 -
-127.0.0.1 - - [07/Jun/2026 09:26:46] "GET /api/config HTTP/1.1" 200 -
+127.0.0.1 - - [07/Jun/2026 09:43:21] "GET /api/status HTTP/1.1" 200 -
