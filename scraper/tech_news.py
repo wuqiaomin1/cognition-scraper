@@ -16,6 +16,8 @@ class Kr36Scraper(BaseScraper):
         try:
             resp = self.session.get("https://36kr.com/feed", timeout=15)
             resp.raise_for_status()
+            # 强制 UTF-8 编码，避免中文乱码
+            resp.encoding = 'utf-8'
             
             root = ET.fromstring(resp.text)
             channel = root.find('channel')
@@ -60,6 +62,7 @@ class HuxiuScraper(BaseScraper):
             try:
                 resp = self.session.get(rss_url, timeout=15)
                 resp.raise_for_status()
+                resp.encoding = 'utf-8'
                 
                 root = ET.fromstring(resp.text)
                 channel = root.find('channel')
